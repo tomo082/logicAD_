@@ -90,10 +90,12 @@ class OpenAIClient:
                 logging.warning("Transient API error %s; retry in %.1fs", type(exc).__name__, delay)
                 self._sleep(delay)
 
-    def chat(self, prompt, *, model, images=(), schema=None, temperature=0.0, top_p=1.0):
+    def chat(self, prompt, *, model, images=(), schema=None, temperature=0.0, top_p=1.0, max_tokens=None, seed=None):
         content = [{"type": "text", "text": prompt}] + [image_url(img) for img in images]
         kwargs = dict(model=model, messages=[{"role": "user", "content": content}],
-                      temperature=temperature, top_p=top_p, max_tokens=self.config.max_tokens)
+                      temperature=temperature, top_p=top_p, max_tokens=max_tokens or self.config.max_tokens)
+        if seed is not None:
+            kwargs["seed"] = seed
         mode = "text"
         if schema:
             mode = "json_schema"

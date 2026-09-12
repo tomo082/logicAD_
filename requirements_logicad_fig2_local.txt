@@ -1,0 +1,9 @@
+# Install a CUDA-compatible torch/torchvision pair first on DLBox.
+-r requirements_logicad_fig2.txt
+torch>=2.6,<3
+torchvision>=0.21,<1
+transformers>=4.57,<6
+accelerate>=1.2,<2
+sentence-transformers>=3.4,<6
+sentencepiece>=0.2,<1
+# For --load-in-4bit / --load-in-8bit on CUDA, additionally install bitsandbytes.

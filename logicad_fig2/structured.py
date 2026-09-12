@@ -33,7 +33,7 @@ def parse_json(text: str, schema=None):
     return value
 
 
-def cached_structured(client, cache, key, *, prompt, schema, model, retries=2, validator=None):
+def cached_structured(backend, cache, key, *, prompt, schema, generation, retries=2, validator=None):
     """Validate -> repair, preserving all raw answers, without fabricating fallback features."""
     value = cache.get(key)
     if value is not None:
@@ -62,7 +62,7 @@ def cached_structured(client, cache, key, *, prompt, schema, model, retries=2, v
             repair = ("\nPrevious response failed validation: " + error +
                       "\nPrevious response: " + attempts[-1].get("text", "") +
                       "\nRepair the JSON using only the supplied observations. Return the complete JSON object.")
-        response = client.chat(prompt + repair, model=model, schema=schema)
+        response = backend.generate(prompt + repair, schema, generation)
         attempts.append(response)
         cache.put(attempts_key, attempts)
         try:

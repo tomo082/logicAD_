@@ -34,7 +34,68 @@ class Config:
     max_mis_checks: int = 64
     normal_rules: str = "reference"
 
+    vlm_backend: str = "openai"
+    vlm_revision: str | None = None
+    formatter_backend: str = "openai"
+    formatter_revision: str | None = None
+    embedding_backend: str = "openai"
+    embedding_revision: str | None = None
+    logic_backend: str = "openai"
+    logic_revision: str | None = None
+    vlm_temperature: float | None = None
+    vlm_top_p: float | None = None
+    vlm_max_tokens: int | None = None
+    vlm_do_sample: bool | None = None
+    formatter_temperature: float | None = None
+    formatter_top_p: float | None = None
+    formatter_max_tokens: int | None = None
+    formatter_do_sample: bool | None = None
+    logic_temperature: float | None = None
+    logic_top_p: float | None = None
+    logic_max_tokens: int | None = None
+    logic_do_sample: bool | None = None
+    formatter_model: str | None = None
+    dtype: str = "auto"
+    device_map: str = "auto"
+    load_in_4bit: bool = False
+    load_in_8bit: bool = False
+    local_files_only: bool = False
+    offload_folder: str | None = None
+    max_memory: dict | None = None
+    embedding_device: str = "cpu"
+    embedding_batch_size: int = 32
+    vlm_image_strategy: str = "sequential"
+    unload_on_switch: bool = False
+
     def __post_init__(self):
+        if self.formatter_model is not None:
+            if self.format_model != "gpt-4o" and self.format_model != self.formatter_model:
+                raise ValueError("Conflicting format_model and formatter_model")
+            object.__setattr__(self, "format_model", self.formatter_model)
+        object.__setattr__(self, "formatter_model", self.format_model)
+        for role in ("vlm", "formatter", "embedding", "logic"):
+            if getattr(self, role + "_backend") not in ("openai", "hf"):
+                raise ValueError(f"Unknown {role} backend")
+        if self.load_in_4bit and self.load_in_8bit:
+            raise ValueError("Choose either 4-bit or 8-bit quantization")
+        if self.dtype not in ("auto", "float16", "bfloat16", "float32"):
+            raise ValueError("Unsupported dtype")
+        if self.vlm_image_strategy not in ("sequential", "native"):
+            raise ValueError("Unsupported VLM image strategy")
+        if self.embedding_batch_size < 1:
+            raise ValueError("embedding_batch_size must be positive")
+        if self.max_memory is not None and not isinstance(self.max_memory, dict):
+            raise ValueError("max_memory must be a JSON object")
+        if self.device_map not in ("auto", "balanced", "balanced_low_0", "sequential", "none"):
+            raise ValueError("Unsupported device_map strategy")
+        for role in ("vlm", "formatter", "logic"):
+            from .backends.base import generation_for
+            gen = generation_for(self, role)
+            tokens = getattr(self, role + "_max_tokens")
+            if (tokens is not None and tokens < 1) or not 0 <= gen.temperature <= 2 or not 0 < gen.top_p <= 1:
+                raise ValueError(f"Invalid {role} generation settings")
+            if gen.do_sample and gen.temperature <= 0:
+                raise ValueError(f"{role} sampling requires positive temperature")
         for name in ("k", "max_tokens", "lof_neighbors", "max_rois", "prover_timeout"):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} must be positive")

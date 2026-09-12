@@ -2,6 +2,8 @@
 
 既存anomalibのモデル登録を通さず、LOCO画像からテキスト特徴・JSON・異常スコアを
 生成する追加実装です。学習は行わず、カテゴリごとに正常参照画像1枚を使用します。
+Figure 2/3-inspired な実験基盤であり、GPT-4o 構成の厳密再現を目的としません。
+VLM・Formatter・Embedding・Logic Formalizer を独立して交換できます。
 論文Table 1の数値を再現済みとするものではありません。
 
 実装前の調査と対応表は [docs/FIG2_RECONSTRUCTION.md](docs/FIG2_RECONSTRUCTION.md) にあります。
@@ -13,9 +15,9 @@ normal image                         query image
     |                                     |
     +-- original + GroundingDINO ROI ------+
     |                                     |
-Guided category observations (GPT-4o, K=3 independent requests)
+Guided category observations (selected VLM, K=3 independent requests)
     |                                     |
-text-embedding-3-large -> LOF -> seeded random surviving description
+selected embedding -> LOF -> seeded random surviving description
     |                                     |
     +------------- two branches ----------+
     |
@@ -28,7 +30,8 @@ text-embedding-3-large -> LOF -> seeded random surviving description
 ```
 
 参照画像とqueryはそれぞれ独立に特徴抽出します。正常画像の内容やラベルをqueryの
-観察プロンプトへ混ぜません。ROI画像は元画像の詳細として同一リクエストへ渡します。
+観察プロンプトへ混ぜません。元画像と ROI の渡し方は VLM adapter が吸収します。
+OpenAI は一括入力、HF の標準設定は画像ごとの推論と観察文の統合です。
 
 | モジュール | 役割 |
 | --- | --- |
@@ -55,7 +58,8 @@ python scripts/run_logicad_fig2.py --help
 ```
 
 キーは `OPENAI_API_KEY` のみから取得します。既存の `keys/` ファイルやAzureの設定は
-使用しません。GPT-4oとembeddingはAPIで実行するため、大容量GPUは不要です。
+使用しません。OpenAI 構成は API で実行するため、大容量GPUは不要です。
+完全ローカル構成では API キーを要求せず、OpenAI SDK も使用しません。
 APIキー未設定でも、dry-run、offlineテスト、必要なcacheが全部揃った再実行は可能です。
 
 ### GroundingDINO（任意だがFigure 3再現には必要）
@@ -91,6 +95,125 @@ ROIを無効化するablation用です。ROIなしの結果を完全なFigure 3�
 cropはbbox中心から `--roi-padding 1.5` 倍、境界でclipし、信頼度順で最大
 `--max-rois 32` 個です。既存ローダーは絶対checkpointパスを受け取り、モデル登録を
 経由せず単体ロードします。
+
+## Backend の選択とローカル実行
+
+| 役割 | OpenAI | HF local |
+| --- | --- | --- |
+| VLM | 画像付き Chat Completions | AutoProcessor + AutoModelForImageTextToText、最初の対象は LLaVA-NeXT |
+| Formatter | JSON schema 付き生成 | AutoTokenizer + AutoModelForCausalLM、JSON 検証・修復 |
+| Embedding | Embeddings API | SentenceTransformer、モデル固有の次元を使用 |
+| Logic Formalizer | 独立した生成モデル | Formatter と同じ adapter、モデルは独立指定 |
+
+`backends/base.py` の Protocol と `BackendBundle` が境界です。factory が provider を
+選択し、抽出・LOF・JSON 検証・L2 正規化・コサイン比較は共通です。
+`--enable-reasoner` がなければ Logic backend は作成しません。ATP は従来どおりです。
+
+### Linux / DLBox の追加依存
+
+専用 venv で CUDA と互換性のある torch / torchvision を先に導入してください。
+OpenAI のみの環境は従来の `requirements_logicad_fig2.txt` だけで動きます。
+
+```bash
+python -m pip install -r requirements_logicad_fig2_local.txt
+# CUDA で 4bit / 8bit 量子化する場合だけ追加
+python -m pip install bitsandbytes
+```
+
+HF を選ぶ役割には `--*-model` で HF ID またはローカルパスを指定してください。
+backend を変更しても既存の OpenAI モデル名の既定値は自動変更しません。
+以下は ROI 無効の接続確認例です。ROI を使う場合は `--disable-roi` を外して
+前述の GroundingDINO 設定を追加します。
+
+### OpenAI 構成
+
+```bash
+python scripts/run_logicad_fig2.py \
+  --data-root /data/mvtec_loco_anomaly_detection --category breakfast_box \
+  --vlm-backend openai --vlm-model gpt-4o \
+  --formatter-backend openai --formatter-model gpt-4o \
+  --embedding-backend openai --embedding-model text-embedding-3-large \
+  --disable-roi --max-images 2
+```
+
+### LLaVA + OpenAI のハイブリッド
+
+```bash
+python scripts/run_logicad_fig2.py \
+  --data-root /data/mvtec_loco_anomaly_detection --category breakfast_box \
+  --vlm-backend hf --vlm-model llava-hf/llava-v1.6-vicuna-13b-hf \
+  --device auto --dtype auto --load-in-4bit \
+  --formatter-backend openai --formatter-model gpt-4o \
+  --embedding-backend openai --embedding-model text-embedding-3-large \
+  --disable-roi --max-images 2
+```
+
+### 完全ローカル
+
+`LOCAL_TEXT_MODEL` を使用する causal text-generation model の ID またはパスに設定します。
+chat template があればそれを使い、なければ通常のテキストプロンプトを使います。
+
+```bash
+export LOCAL_TEXT_MODEL='/models/your-text-instruct-model'
+python scripts/run_logicad_fig2.py \
+  --data-root /data/mvtec_loco_anomaly_detection --category breakfast_box \
+  --vlm-backend hf --vlm-model llava-hf/llava-v1.6-vicuna-13b-hf \
+  --formatter-backend hf --formatter-model "$LOCAL_TEXT_MODEL" \
+  --embedding-backend hf --embedding-model sentence-transformers/all-MiniLM-L6-v2 \
+  --device auto --dtype auto --load-in-4bit --unload-on-switch \
+  --embedding-device cpu --disable-roi --max-images 2
+```
+
+ネットワークも使わない場合は重み・processor・tokenizer を事前配置して
+`--local-files-only` を追加します。量子化は HF VLM と HF text の両方に適用されます。
+Embedding は別の `--embedding-device`（既定 CPU）で実行します。
+Logic をローカルで有効化する場合は `--enable-reasoner --logic-backend hf`、
+`--logic-model "$LOCAL_TEXT_MODEL"` と ATP のパスを追加します。
+
+### 生成とメモリ
+
+- `--vlm-temperature` / `--vlm-top-p` / `--vlm-max-tokens` と
+  `--vlm-do-sample` / `--no-vlm-do-sample` で生成を設定できます。
+  `formatter`・`logic` も同じ引数を持ち、標準では deterministic です。
+  sampling は `--formatter-do-sample --formatter-temperature 0.2` のように指定します。
+- 従来の `--temperature` / `--top-p` は VLM の既定値、`--max-tokens` は全生成段階の
+  共通既定値です。`--format-model` は `--formatter-model` の互換名です。
+- `--k 3` はローカルでも 3 回生成します。`--seed` と画像 ID、K・ROI の添字で seed を
+  分けます。同じ記述が出た場合は既存 LOF fallback を使います。機器・ライブラリをまたぐ
+  ビット単位の再現性は保証しません。
+- HF 標準の `--vlm-image-strategy sequential` は元画像と各 crop を別々に処理し、
+  元画像の個数・配置を優先するラベル付き観察文へ統合します。ROI を追加物体として数えない
+  指示を含めます。`native` は複数画像に対応する checkpoint 用の明示設定です。
+  処理方法・画像数・生成設定は raw cache の metadata に保存します。
+- `--device auto --dtype auto` は CUDA 利用可能時 float16、CPU 時 float32 です。
+  `--dtype bfloat16` 等で上書きできます。4bit / 8bit は排他的で、この adapter では CUDA と
+  bitsandbytes が必要です。未導入時は明確なエラーを返します。
+- `--device-map auto` は HF/Accelerate の配置を使います。`balanced`、`balanced_low_0`、
+  `sequential`、`none` も指定できます。CPU offload の指定例は
+  `--max-memory '{"0":"10GiB","cpu":"32GiB"}' --offload-folder /tmp/logicad-offload` です。
+  offload できる層・量子化との組合せはモデルとライブラリに依存します。
+- 最初の推論時だけモデルをロードします。`--unload-on-switch` は役割変更時に前の backend を
+  解放します。省 VRAM と引き換えに再ロードが増えます。GroundingDINO の常駐メモリは別途必要です。
+  13B の 4bit が RTX 3060 12GB に必ず収まる保証はありません。
+
+### キャッシュと対応範囲
+
+backend・モデル・revision・dtype・量子化・配置設定、prompt/schema、生成設定、ROI 設定を
+該当段階の fingerprint に含めます。`--vlm-revision` / `--formatter-revision` /
+`--embedding-revision` / `--logic-revision` で HF の commit revision を固定できます。
+可変 revision やローカルパス内の重みを更新した場合は `--force` または新しい出力先を使います。
+重みファイル自体の hash は計算しません。旧キャッシュは残しますが、backend 情報のない旧キーは
+新実験へ流用しません。段階再利用・失敗応答保存・`--retry-errors` は維持しています。
+
+Qwen-VL 等すべての multimodal model の互換性は未検証です。モデル固有の入力変換は
+`HFVisionBackend` の loader / `_infer` を拡張し、pipeline にモデル名の条件分岐を追加しません。
+ローカル JSON は制約付きデコードではなく schema 指示と生成後の検証・修復です。
+長い観察文は SentenceTransformer の入力長上限で切り詰められます。
+上限は embedding cache の metadata に保存します。
+
+実 LLaVA 重み・GPU・API を使う benchmark は未実施です。モックの HF loader/generate、
+ハイブリッド構築、完全ローカルの画像→スコア、cache、CLI をテストしています。
+設計監査と公式資料は [docs/FIG2_BACKENDS.md](docs/FIG2_BACKENDS.md) にあります。
 
 ## データ配置
 
@@ -293,7 +416,7 @@ offline smokeは合成画像と模擬APIで全5カテゴリ×5参照を実行し
 増えないことを確認します。出力には `SMOKE_TEST_ONLY.json` が付きます。
 そのAUROC/F1は実データ性能を表しません。実APIに切り替えるには `run_logicad_fig2.py` を使います。
 
-この実装作業ではWindows / Python 3.12専用venvで45テストが通過（実ATPの2件はskip）し、5カテゴリ×5runの
+この実装作業ではWindows / Python 3.12専用venvで60テストが通過（実ATPの2件はskip）し、5カテゴリ×5runの
 offline smoke（100 image/reference pair、模擬API170回、再開時追加0回）を実行しました。
 Python 3.10の文法互換チェックも実施しました。LinuxのPython 3.10/3.12向けCI定義を
 追加しましたが、まだGitHub上では実行していません。

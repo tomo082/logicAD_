@@ -92,7 +92,7 @@ def evaluate(datasets, pipeline, config, output_dir, *, num_runs=1, reference_in
                      "references": [{"path": str(p), "sha256": file_digest(p)} for p in references],
                      "queries": [{"path": str(s.path), "label": s.label, "split": s.split,
                                   "sha256": file_digest(s.path)} for s in dataset.queries]})
-    manifest = {"config": asdict(config), "plan": plan, "pipeline_version": 1,
+    manifest = {"config": asdict(config), "plan": plan, "pipeline_version": 2, "backends": pipeline.signature(),
                 "prompts": {d.category: asdict(get_prompts(d.category)) for d in datasets},
                 "reasoner": reasoner.signature() if reasoner else None}
     destination = Path(output_dir) / "results" / fingerprint(manifest)

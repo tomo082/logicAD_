@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from .cache import canonical_json, fingerprint
+from .backends.base import generation_for
+from .backends.compat import as_backends
 from .embeddings import cached_embeddings, normalize
 from .prompts import get_prompts
 from .structured import cached_structured
@@ -17,17 +19,20 @@ def canonical_features(value):
 
 class FormatEmbedder:
     def __init__(self, client, cache, config):
-        self.client, self.cache, self.config = client, cache, config
+        self.backends = as_backends(client, config)
+        self.cache, self.config = cache, config
 
     def format_and_embed(self, text, category):
         prompts, c = get_prompts(category), self.config
-        signature = {"text": text, "prompt": prompts.format, "schema": prompts.schema, "model": c.format_model,
-                     "max_tokens": c.max_tokens, "version": 1}
+        generation = generation_for(c, "formatter")
+        signature = {"text": text, "prompt": prompts.format, "schema": prompts.schema,
+                     "backend": self.backends.formatter.signature(), "generation": generation.signature(), "version": 2}
         key = f"formatted/{category}/{fingerprint(signature)}.json"
-        value = cached_structured(self.client, self.cache, key, prompt=prompts.format + "\nObservations:\n" + text,
-                                  schema=prompts.schema, model=c.format_model, retries=c.json_retries)
+        value = cached_structured(self.backends.activate("formatter"), self.cache, key,
+                                  prompt=prompts.format + "\nObservations:\n" + text,
+                                  schema=prompts.schema, generation=generation, retries=c.json_retries)
         canonical = canonical_json(canonical_features(value))
-        vectors, embedding_key = cached_embeddings(self.client, self.cache, [canonical], c.embedding_model)
+        vectors, embedding_key = cached_embeddings(self.backends.activate("embedding"), self.cache, [canonical])
         return {"formatted": value, "canonical": canonical, "embedding": normalize(vectors[0]).tolist(),
                 "formatted_cache": key, "embedding_cache": embedding_key}
 
@@ -35,6 +40,10 @@ class FormatEmbedder:
 class FeaturePipeline:
     def __init__(self, extractor, formatter, cache, config):
         self.extractor, self.formatter, self.cache, self.config = extractor, formatter, cache, config
+
+    def signature(self):
+        return {"extraction_backends": self.extractor.backends.signature(),
+                "format_backends": self.formatter.backends.signature()}
 
     def image(self, path, category, *, reference=False):
         extracted = self.extractor.extract(path, category)

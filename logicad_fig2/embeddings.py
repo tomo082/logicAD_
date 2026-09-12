@@ -23,11 +23,15 @@ def cosine_anomaly_score(normal, query) -> float:
     return float(1.0 - np.clip(np.dot(normal, query), -1.0, 1.0))
 
 
-def cached_embeddings(client, cache, texts, model):
-    key = f"embeddings/{fingerprint({'model': model, 'texts': texts})}.json"
+def cached_embeddings(backend, cache, texts, model=None):
+    if model is not None:
+        from .backends.compat import LegacyEmbedding
+
+        backend = LegacyEmbedding(backend, model)
+    key = f"embeddings/{fingerprint({'backend': backend.signature(), 'texts': texts})}.json"
     value = cache.get(key)
     if value is None:
-        value = client.embed(texts, model=model)
+        value = backend.embed(texts)
         # Retain invalid provider answers as attempts, not successful cache hits,
         # so --retry-errors can recover without discarding every successful stage.
         attempts_key = key.removesuffix(".json") + ".attempts.json"

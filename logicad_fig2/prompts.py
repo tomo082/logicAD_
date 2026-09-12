@@ -85,6 +85,11 @@ VISUAL_CONTEXT = (
     "Do not invent hidden objects or classify the image as normal/abnormal. "
 )
 
+OBSERVATION_INSTRUCTION = (
+    "Give a concise factual observation record in English following the inspection steps. "
+    "Do not invent hidden objects or classify the image as normal/abnormal. "
+)
+
 FORMAT_PROMPT = (
     "Normalize the supplied observations into the category JSON schema. Preserve actual observations "
     "and uncertainty. Never repair an anomaly to match a normal pattern. Use null for unknown counts "
@@ -158,5 +163,5 @@ def get_prompts(category: str) -> CategoryPrompts:
         raise ValueError(f"Unsupported category: {category}")
     logic = PROMPT0 + RULE + lang_rules_dict.get(category, LOGIC_EXTRA.get(category, ""))
     logic += two_shot_dict.get(category, "") + "\n" + LOGIC_OUTPUT_PROMPT
-    return CategoryPrompts(category, FEATURE_PROMPTS[category], VISUAL_CONTEXT + EXTRACTION_PROMPTS[category],
+    return CategoryPrompts(category, FEATURE_PROMPTS[category], OBSERVATION_INSTRUCTION + EXTRACTION_PROMPTS[category],
                            FORMAT_PROMPT, SCHEMAS[category], logic)

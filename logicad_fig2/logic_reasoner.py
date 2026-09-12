@@ -10,6 +10,8 @@ from pathlib import Path
 from formal_prompts_spec import logical_spec_dict
 
 from .cache import fingerprint
+from .backends.base import generation_for
+from .backends.compat import as_backends
 from .logic_syntax import Formula, parse_formulas
 from .prompts import (ALIASES, NORMAL_LOGIC_PROMPT, PREDICATE_FEATURES, STRING,
                       ZERO_DEFAULT_PREDICATES, array, get_prompts, obj)
@@ -125,7 +127,8 @@ def explain_subset(subset):
 
 class LogicReasoner:
     def __init__(self, client, cache, config, runner=subprocess.run):
-        self.client, self.cache, self.config, self.runner = client, cache, config, runner
+        self.backends = as_backends(client, config)
+        self.cache, self.config, self.runner = cache, config, runner
         self.prover = resolve_executable(config.prover9_path, "prover9")
         self.mace = resolve_executable(config.mace4_path, "mace4")
         if not self.prover:
@@ -136,7 +139,8 @@ class LogicReasoner:
     def signature(self):
         return {"prover9": self.prover, "mace4": self.mace, "timeout": self.config.prover_timeout,
                 "normal_rules": self.config.normal_rules, "max_mis_checks": self.config.max_mis_checks,
-                "logic_model": self.config.logic_model, "version": 1}
+                "logic_backend": self.backends.logic.signature() if self.backends.logic else None,
+                "generation": generation_for(self.config, "logic").signature(), "version": 2}
 
     def formalize(self, text, category, *, normal=False):
         prompts = get_prompts(category)
@@ -147,11 +151,12 @@ class LogicReasoner:
             prompt += " Preserve every observed position(cable,slot), including multiple differing slot values. "
         prompt += "\nObservations:\n" + text
         features, aliases = PREDICATE_FEATURES[category], ALIASES.get(category, {})
-        settings = {"prompt": prompt, "model": self.config.logic_model, "schema": FORMAL_SCHEMA,
-                    "max_tokens": self.config.max_tokens, "features": features, "aliases": aliases}
+        generation = generation_for(self.config, "logic")
+        settings = {"prompt": prompt, "backend": self.backends.logic.signature(), "schema": FORMAL_SCHEMA,
+                    "generation": generation.signature(), "features": features, "aliases": aliases}
         key = f"formal/{category}/{fingerprint(settings)}.json"
-        value = cached_structured(self.client, self.cache, key, prompt=prompt, schema=FORMAL_SCHEMA,
-                                  model=self.config.logic_model, retries=self.config.json_retries,
+        value = cached_structured(self.backends.activate("logic"), self.cache, key, prompt=prompt, schema=FORMAL_SCHEMA,
+                                  generation=generation, retries=self.config.json_retries,
                                   validator=lambda value: parse_formulas(value["formulas"], features, aliases))
         return parse_formulas(value["formulas"], features, aliases), key
 

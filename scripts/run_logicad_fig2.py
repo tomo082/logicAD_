@@ -15,7 +15,7 @@ from logicad_fig2.config import Config
 from logicad_fig2.dataset import discover_category
 from logicad_fig2.evaluator import evaluate
 from logicad_fig2.format_embedding import FeaturePipeline, FormatEmbedder
-from logicad_fig2.openai_client import OpenAIClient
+from logicad_fig2.backends.factory import build_backends
 from logicad_fig2.prompts import CATEGORIES
 from logicad_fig2.roi import ROIExtractor
 from logicad_fig2.text_extraction import TextExtractor
@@ -43,10 +43,30 @@ def parser():
     for name, kind in [(n, str) for n in strings] + [(n, int) for n in integers] + [(n, float) for n in floats]:
         p.add_argument("--" + name.replace("_", "-"), type=kind, default=getattr(defaults, name))
     p.add_argument("--gdino-config", choices=("swint", "swinb"), default="swint")
-    p.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:N; GPU is used only for ROI")
+    p.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:N; ROI and local generation device")
     p.add_argument("--disable-roi", action="store_true")
     p.add_argument("--enable-reasoner", action="store_true")
     p.add_argument("--normal-rules", choices=("reference", "legacy"), default="reference")
+    for role in ("vlm", "formatter", "embedding", "logic"):
+        p.add_argument(f"--{role}-backend", choices=("openai", "hf"), default="openai")
+        p.add_argument(f"--{role}-revision")
+    p.add_argument("--formatter-model")
+    for role in ("vlm", "formatter", "logic"):
+        for field, kind in (("temperature", float), ("top-p", float), ("max-tokens", int)):
+            p.add_argument(f"--{role}-{field}", type=kind)
+        p.add_argument(f"--{role}-do-sample", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--dtype", choices=("auto", "float16", "bfloat16", "float32"), default="auto")
+    p.add_argument("--device-map", default="auto")
+    quant = p.add_mutually_exclusive_group()
+    quant.add_argument("--load-in-4bit", action="store_true")
+    quant.add_argument("--load-in-8bit", action="store_true")
+    p.add_argument("--local-files-only", action="store_true")
+    p.add_argument("--offload-folder")
+    p.add_argument("--max-memory", type=json.loads, help='JSON device memory limits, e.g. {"0":"10GiB","cpu":"32GiB"}')
+    p.add_argument("--embedding-device", default="cpu")
+    p.add_argument("--embedding-batch-size", type=int, default=32)
+    p.add_argument("--vlm-image-strategy", choices=("sequential", "native"), default="sequential")
+    p.add_argument("--unload-on-switch", action="store_true")
     return p
 
 
@@ -73,17 +93,20 @@ def main(argv=None):
         if not config.disable_roi and not config.gdino_checkpoint:
             logging.warning("GroundingDINO checkpoint unspecified: running with original images only")
         cache = Cache(args.output_dir / "cache", force=args.force)
-        client = OpenAIClient(config, args.output_dir / "api_usage.jsonl")
-        extractor = TextExtractor(client, ROIExtractor(config), cache, config)
-        pipeline = FeaturePipeline(extractor, FormatEmbedder(client, cache, config), cache, config)
+        backends = build_backends(config, args.output_dir / "api_usage.jsonl")
+        extractor = TextExtractor(backends, ROIExtractor(config), cache, config)
+        pipeline = FeaturePipeline(extractor, FormatEmbedder(backends, cache, config), cache, config)
         reasoner = None
         if config.enable_reasoner:
             from logicad_fig2.logic_reasoner import LogicReasoner
 
-            reasoner = LogicReasoner(client, cache, config)
-        result = evaluate(datasets, pipeline, config, args.output_dir, num_runs=args.num_runs,
-                          reference_index=args.reference_index, reasoner=reasoner,
-                          retry_errors=args.retry_errors, force=args.force)
+            reasoner = LogicReasoner(backends, cache, config)
+        try:
+            result = evaluate(datasets, pipeline, config, args.output_dir, num_runs=args.num_runs,
+                              reference_index=args.reference_index, reasoner=reasoner,
+                              retry_errors=args.retry_errors, force=args.force)
+        finally:
+            backends.unload()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if all(row["complete"] for row in result["runs"]) else 2
     except (ValueError, FileNotFoundError, RuntimeError) as exc:

@@ -1,9 +1,9 @@
 name: Figure 2 offline tests
 on:
   push:
-    paths: ['logicad_fig2/**', 'scripts/*logicad_fig2.py', 'tests/fig2/**', 'requirements_logicad_fig2.txt', '.github/workflows/fig2-tests.yml']
+    paths: ['logicad_fig2/**', 'scripts/*logicad_fig2.py', 'tests/fig2/**', 'requirements_logicad_fig2*.txt', '.github/workflows/fig2-tests.yml']
   pull_request:
-    paths: ['logicad_fig2/**', 'scripts/*logicad_fig2.py', 'tests/fig2/**', 'requirements_logicad_fig2.txt', '.github/workflows/fig2-tests.yml']
+    paths: ['logicad_fig2/**', 'scripts/*logicad_fig2.py', 'tests/fig2/**', 'requirements_logicad_fig2*.txt', '.github/workflows/fig2-tests.yml']
 jobs:
   test:
     runs-on: ubuntu-latest
