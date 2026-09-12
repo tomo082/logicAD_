@@ -1,5 +1,8 @@
 # LogicalAD
 
+For the standalone Figure 2/3 reconstruction (one-shot evaluation, OpenAI API,
+ROI extraction and optional theorem reasoning), see [README_FIG2.md](README_FIG2.md).
+
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
