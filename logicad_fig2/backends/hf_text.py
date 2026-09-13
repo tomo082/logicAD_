@@ -7,7 +7,7 @@ from .hf_common import HFGenerativeModel, dependencies, pretrained_kwargs
 
 class HFTextBackend(HFGenerativeModel):
     def signature(self):
-        return {**super().signature(), "role": "text", "prompt_mode": "chat_template_or_plain_v1"}
+        return {**super().signature(), "role": "text", "prompt_mode": "chat_template_or_plain_v3"}
 
     @staticmethod
     def _load_pretrained(model_id, options):
@@ -24,7 +24,19 @@ class HFTextBackend(HFGenerativeModel):
     def generate(self, prompt, schema, generation):
         self._load()
         if schema is not None:
-            prompt += "\nReturn only JSON conforming to this schema:\n" + json.dumps(schema, sort_keys=True)
+            prompt += (
+                "\nReturn only JSON data conforming to this schema."
+                " For unknown values, use JSON null when the schema permits null; "
+                "never use strings such as 'unknown', 'null', or 'N/A'. "
+                "Counts must be nonnegative JSON integers or null, never strings. "
+                "Presence values must be JSON true, false, or null, never strings."
+                " The schema describes the output; do not output the schema itself. "
+                "Array-valued fields must contain arrays directly, never objects "
+                "wrapping an array in an items key. "
+                "The items keyword describes each array element, not an extra output field. "
+                "Use only the supplied observations; do not invent or discard observations "
+                "to satisfy the schema. Schema:\n"
+            ) + json.dumps(schema, sort_keys=True)
         chat = bool(getattr(self._processor, "chat_template", None))
         if chat:
             prompt = self._processor.apply_chat_template(

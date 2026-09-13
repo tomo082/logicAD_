@@ -159,18 +159,32 @@ def test_hf_images_lazy_generation_and_unload(fake_runtime, strategy, count):
     assert fake_runtime.generated[-1]["temperature"] == .4
 
 
-def test_hf_text_schema_and_repair(fake_runtime, monkeypatch, tmp_path):
+@pytest.mark.parametrize("invalid", [
+    '{"right": {"items": [{"count": null, "present": null}]}}',
+    '{"right": [{"count": "unknown", "present": null}]}',
+    '{"right": [{"count": null, "present": "unknown"}]}',
+])
+def test_hf_text_schema_and_repair(fake_runtime, monkeypatch, tmp_path, invalid):
     backend = HFTextBackend("test/text", loader=fake_runtime.loader)
     backend._load()
-    answers = iter(["bad json", '{"x": 1}'])
+    answers = iter([invalid, '{"right": [{"count": null, "present": null}]}'])
     monkeypatch.setattr(backend._processor, "decode", lambda *args, **kwargs: next(answers))
-    schema = {"type": "object", "required": ["x"], "properties": {"x": {"type": "integer"}}}
+    schema = {"type": "object", "required": ["right"],
+              "properties": {"right": {"type": "array", "items": {
+                  "type": "object", "required": ["count", "present"],
+                  "properties": {"count": {"type": ["integer", "null"], "minimum": 0},
+                                 "present": {"type": ["boolean", "null"]}}}}}}
     result = cached_structured(backend, Cache(tmp_path), "text.json", prompt="observations",
                                schema=schema, generation=GenerationConfig())
-    assert result == {"x": 1}
+    assert result == {"right": [{"count": None, "present": None}]}
     prompts = backend._processor.prompts
     assert "Return only JSON" in prompts[-1][0]["content"]
     assert "Repair the JSON" in prompts[-1][0]["content"]
+    assert "never objects wrapping an array in an items key" in prompts[-1][0]["content"]
+    assert invalid in prompts[-1][0]["content"]
+    assert "use JSON null when the schema permits null" in prompts[-1][0]["content"]
+    assert "Counts must be nonnegative JSON integers or null" in prompts[-1][0]["content"]
+    assert "Presence values must be JSON true, false, or null" in prompts[-1][0]["content"]
 
 
 def test_embedding_dimension_and_cache_separation(tmp_path):
